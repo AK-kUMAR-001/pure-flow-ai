@@ -52,6 +52,7 @@ initSensorRoutes(app);
 
 // Serve static files from the dist directory (Vite build output)
 const distPath = path.join(__dirname, '../../dist');
+console.log('📂 Serving static files from:', distPath);
 app.use(express.static(distPath));
 
 /**
@@ -81,7 +82,12 @@ app.get('*', (req, res) => {
   if (req.path.startsWith('/api')) {
     return res.status(404).json({ success: false, message: 'Not found' });
   }
-  res.sendFile(path.join(distPath, 'index.html'));
+  res.sendFile(path.join(distPath, 'index.html'), (err) => {
+    if (err) {
+      console.error('❌ Error sending index.html:', err);
+      res.status(404).send('Frontend build not found. Please run "npm run build" to generate the dist folder.');
+    }
+  });
 });
 
 /**
