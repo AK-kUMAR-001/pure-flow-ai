@@ -7,13 +7,18 @@
 import express, { Express } from 'express';
 import cors from 'cors';
 import http from 'http';
-import { WebSocketServer } from 'ws';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { WebSocketServer, WebSocket } from 'ws';
 import { initSensorRoutes, registerWSClient } from './routes/sensors';
 
-const PORT = process.env.SENSOR_PORT || 5000;
+const PORT = process.env.PORT || process.env.SENSOR_PORT || 5000;
 const app: Express = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 /**
  * Middleware
@@ -45,6 +50,10 @@ app.get('/health', (req, res) => {
  */
 initSensorRoutes(app);
 
+// Serve static files from the dist directory (Vite build output)
+const distPath = path.join(__dirname, '../../dist');
+app.use(express.static(distPath));
+
 /**
  * WebSocket connection handling
  */
@@ -68,24 +77,28 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 /**
  * 404 handler
  */
-app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    message: 'Not found'
-  });
+app.get('*', (req, res) => {
+  if (req.path.startsWith('/api')) {
+    return res.status(404).json({ success: false, message: 'Not found' });
+  }
+  res.sendFile(path.join(distPath, 'index.html'));
 });
 
 /**
  * Start server
  */
-server.listen(PORT, () => {
-  console.log('\n🚀 IoT Sensor Server started!');
-  console.log(`📡 API: http://localhost:${PORT}/api/sensors`);
-  console.log(`🔌 WebSocket: ws://localhost:${PORT}`);
-  console.log(`❤️  Health: http://localhost:${PORT}/health\n`);
-  console.log('ESP32 will send sensor data to:');
-  console.log(`  POST http://localhost:${PORT}/api/sensors\n`);
-});
+if (!process.env.VERCEL) {
+  server.listen(PORT, () => {
+    console.log('\n🚀 IoT Sensor Server started!');
+    console.log(`📡 API: http://localhost:${PORT}/api/sensors`);
+    console.log(`🔌 WebSocket: ws://localhost:${PORT}`);
+    console.log(`❤️  Health: http://localhost:${PORT}/health\n`);
+    console.log('ESP32 will send sensor data to:');
+    console.log(`  POST http://localhost:${PORT}/api/sensors\n`);
+  });
+}
+
+export default app;
 
 /**
  * Graceful shutdown
