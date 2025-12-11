@@ -88,7 +88,7 @@ const Predict = () => {
     setProfile(prev => ({ ...prev, [key]: value }));
     
     if (key === 'state') {
-      const stateDistricts = getDistricts(value);
+      const stateDistricts = getDistricts(value as string);
       setDistricts(stateDistricts);
       setProfile(prev => ({ ...prev, district: '' }));
     }

@@ -48,6 +48,28 @@ export const getCurrentSeason = (date: Date, latitude: number): Season => {
 
   // Northern Hemisphere (India is mostly in NH)
   if (latitude >= 0) {
+    if (month >= 3 && month <= 5) return 'summer';
+    if (month >= 6 && month <= 9) return 'monsoon';
+    if (month >= 10 && month <= 11) return 'autumn';
+    if (month === 12 || month <= 2) return 'winter';
+  }
+  return 'spring';
+};
+
+/**
+ * Get seasonal adjustment multiplier
+ */
+export const getSeasonalMultiplier = (season: Season): SeasonalAdjustment => {
+  const adjustments: Record<Season, SeasonalAdjustment> = {
+    summer: { season: 'summer', multiplier: 1.35, description: 'Summer: +35% water usage' },
+    monsoon: { season: 'monsoon', multiplier: 0.7, description: 'Monsoon: -30% water usage' },
+    autumn: { season: 'autumn', multiplier: 1.0, description: 'Autumn: Normal usage' },
+    winter: { season: 'winter', multiplier: 0.85, description: 'Winter: -15% water usage' },
+    spring: { season: 'spring', multiplier: 1.1, description: 'Spring: +10% water usage' },
+  };
+  return adjustments[season];
+};
+
 /**
  * Calculate weather-based adjustment factor
  */
