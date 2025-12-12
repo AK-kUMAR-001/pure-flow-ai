@@ -1,4 +1,5 @@
 import express, { Request, Response } from 'express';
+import { SupabaseClient } from '@supabase/supabase-js';
 
 interface SensorData {
   ph: number;
@@ -23,20 +24,47 @@ const MAX_READINGS = 100;
 const wsClients: Set<any> = new Set();
 
 /**
+ * Simple Linear Regression Algorithm for Prediction
+ * Predicts the next value based on the trend of recent historical data
+ */
+function predictNextValue(values: number[]): number {
+  // Need at least 2 data points to form a line
+  if (values.length < 2) return values[values.length - 1] || 0;
+
+  const n = values.length;
+  
+  // Calculate sums required for Linear Regression formula: y = mx + c
+  const sumX = (n * (n - 1)) / 2; // Sum of indices 0..n-1
+  
+  // Loop through values to calculate sum of Y (values) and sum of XY (index * value)
+  const sumY = values.reduce((a, b) => a + b, 0);
+  const sumXY = values.reduce((sum, y, x) => sum + x * y, 0);
+  const sumXX = (n * (n - 1) * (2 * n - 1)) / 6; // Sum of squares of indices
+
+  // Calculate slope (m) and intercept (c)
+  const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+  const intercept = (sumY - slope * sumX) / n;
+
+  // Return the predicted value for the next index (n)
+  return Number((slope * n + intercept).toFixed(2));
+}
+
+/**
  * Initialize sensor routes
  */
-export function initSensorRoutes(app: express.Application) {
+export function initSensorRoutes(app: express.Application, supabase: SupabaseClient) {
   const router = express.Router();
 
   /**
    * POST /api/sensors
    * Receive sensor data from ESP32
    */
-  router.post('/', (req: Request, res: Response) => {
+  router.post('/', async (req: Request, res: Response) => {
     try {
+      // Destructure data from the request body
       const { ph, turbidity, timestamp, deviceId } = req.body as SensorData;
 
-      // Validate input
+      // Validate input types
       if (typeof ph !== 'number' || typeof turbidity !== 'number') {
         return res.status(400).json({
           success: false,
@@ -44,7 +72,7 @@ export function initSensorRoutes(app: express.Application) {
         });
       }
 
-      // Validate ranges
+      // Validate pH range (0-14 standard scale)
       if (ph < 0 || ph > 14) {
         return res.status(400).json({
           success: false,
@@ -52,6 +80,7 @@ export function initSensorRoutes(app: express.Application) {
         });
       }
 
+      // Validate Turbidity range (0-3000 NTU is typical for sensors)
       if (turbidity < 0 || turbidity > 3000) {
         return res.status(400).json({
           success: false,
@@ -71,7 +100,7 @@ export function initSensorRoutes(app: express.Application) {
       // Add to storage
       sensorReadings.push(reading);
 
-      // Keep only last 100 readings
+      // Maintain fixed buffer size: Remove oldest reading if we exceed MAX_READINGS
       if (sensorReadings.length > MAX_READINGS) {
         sensorReadings.shift();
       }
@@ -79,14 +108,36 @@ export function initSensorRoutes(app: express.Application) {
       console.log(`✅ Sensor Data Received [${reading.timestamp}]`);
       console.log(`   pH: ${reading.ph} | Turbidity: ${reading.turbidity} NTU | Device: ${reading.deviceId}`);
 
+      // AI Prediction: Extract last 10 pH readings and predict the next trend
+      const recentPH = sensorReadings.slice(-10).map(r => r.ph);
+      const predictedNextPH = predictNextValue(recentPH);
+      console.log(`🔮 AI Prediction: Next pH trend indicates ~${predictedNextPH}`);
+
       // Broadcast to WebSocket clients
       broadcastSensorUpdate(reading);
+
+      // Database: Insert the new reading into Supabase 'sensor_readings' table
+      const { error } = await supabase.from('sensor_readings').insert([
+        {
+          ph: reading.ph,
+          turbidity: reading.turbidity,
+          inlet_flow: req.body.inlet_flow || 0,
+          outlet_flow: req.body.outlet_flow || 0
+        }
+      ]);
+
+      if (error) {
+        console.error('❌ Supabase Insert Error:', error.message);
+      }
 
       // Return success response
       res.status(201).json({
         success: true,
         message: 'Sensor data received successfully',
-        data: reading
+        data: reading,
+        prediction: {
+          nextPH: predictedNextPH
+        }
       });
 
     } catch (error) {
@@ -105,6 +156,7 @@ export function initSensorRoutes(app: express.Application) {
    */
   router.get('/', (req: Request, res: Response) => {
     try {
+      // Parse limit query parameter, default to 10
       const limit = parseInt(req.query.limit as string) || 10;
       const readings = sensorReadings.slice(-limit).reverse();
 
@@ -222,12 +274,15 @@ export function broadcastSensorUpdate(reading: SensorReading) {
     data: reading
   });
 
+  // Loop through all connected WebSocket clients
   wsClients.forEach(client => {
+    // Check if the client connection is still open
     if (client.readyState === 1) { // WebSocket.OPEN
       try {
         client.send(message);
       } catch (error) {
         console.error('Error sending to WebSocket client:', error);
+        // Remove dead clients to prevent memory leaks
         wsClients.delete(client);
       }
     }
@@ -241,6 +296,7 @@ export function registerWSClient(client: any) {
   wsClients.add(client);
   console.log(`🔌 WebSocket client connected (${wsClients.size} total)`);
 
+  // Event listener for when a client disconnects
   client.on('close', () => {
     wsClients.delete(client);
     console.log(`🔌 WebSocket client disconnected (${wsClients.size} remaining)`);
