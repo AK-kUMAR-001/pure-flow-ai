@@ -1,12 +1,4 @@
-// @ts-ignore: Deno and Node.js global conflicts
-import { createTransport } from "npm:nodemailer";
-
-// Define the expected structure of the incoming request body
-interface EmailRequest {
-  to: string;
-  subject: string;
-  html: string;
-}
+import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -14,18 +6,25 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
 
-// Deno.serve is the modern, built-in entry point for Supabase Edge Functions.
-declare const Deno: any; Deno.serve(async (req: Request) => {
-  console.log("Function invoked");
-  // Handle CORS
+interface EmailRequest {
+  to: string;
+  subject: string;
+  html: string;
+}
+
+serve(async (req: Request) => {
+  console.log("Send email function invoked");
+
+  // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: CORS_HEADERS });
   }
+
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ error: "Method not allowed" }), {
       status: 405,
-      headers: { "Content-Type": "application/json" },
-    })
+      headers: { "Content-Type": "application/json", ...CORS_HEADERS },
+    });
   }
 
   try {
@@ -42,42 +41,47 @@ declare const Deno: any; Deno.serve(async (req: Request) => {
       );
     }
 
-    // Get email credentials from environment variables
-    const smtpHostname = Deno.env.get("SMTP_HOSTNAME");
-    const smtpUsername = Deno.env.get("SMTP_USERNAME");
-    const smtpPassword = Deno.env.get("SMTP_PASSWORD");
-    const smtpPort = parseInt(Deno.env.get("SMTP_PORT") || "587"); // 587 is more common for STARTTLS
-    const smtpFromEmail = Deno.env.get("SMTP_FROM_EMAIL") || "noreply@aquaadapt.com";
+    // Get SendGrid API key from environment
+    const SENDGRID_API_KEY = Deno.env.get("SENDGRID_API_KEY");
+    const FROM_EMAIL = "akshayprabhu19012005@gmail.com";
 
-    if (!smtpHostname || !smtpUsername || !smtpPassword) {
-      console.error("Missing SMTP configuration");
+    if (!SENDGRID_API_KEY) {
+      console.error("Missing SENDGRID_API_KEY");
       return new Response(
         JSON.stringify({ error: "Email service not configured" }),
         {
           status: 500,
-          headers: { "Content-Type": "application/json", ...CORS_HEADERS }
+          headers: { "Content-Type": "application/json", ...CORS_HEADERS },
         }
       );
     }
 
-    // Create SMTP transporter using nodemailer
-    const transporter = createTransport({
-      host: smtpHostname,
-      port: smtpPort,
-      secure: smtpPort === 465, // true for 465, false for other ports
-      auth: {
-        user: smtpUsername,
-        pass: smtpPassword,
+    // Send email using SendGrid API
+    const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${SENDGRID_API_KEY}`,
+        "Content-Type": "application/json",
       },
+      body: JSON.stringify({
+        personalizations: [{ to: [{ email: to }] }],
+        from: { email: FROM_EMAIL, name: "AquaAdapt" },
+        subject: subject,
+        content: [{ type: "text/html", value: html }],
+      }),
     });
 
-    // Send email
-    await transporter.sendMail({
-      from: smtpFromEmail,
-      to: to,
-      subject: subject,
-      html: html,
-    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("SendGrid error:", response.status, errorText);
+      return new Response(
+        JSON.stringify({ error: "Failed to send email" }),
+        {
+          status: 500,
+          headers: { "Content-Type": "application/json", ...CORS_HEADERS },
+        }
+      );
+    }
 
     console.log(`Email sent successfully to ${to}`);
 
@@ -88,9 +92,7 @@ declare const Deno: any; Deno.serve(async (req: Request) => {
       }),
       {
         status: 200,
-        headers: {
-          "Content-Type": "application/json", ...CORS_HEADERS
-        },
+        headers: { "Content-Type": "application/json", ...CORS_HEADERS },
       }
     );
   } catch (error) {
@@ -103,14 +105,8 @@ declare const Deno: any; Deno.serve(async (req: Request) => {
       }),
       {
         status: 500,
-        headers: {
-          "Content-Type": "application/json", ...CORS_HEADERS
-        },
+        headers: { "Content-Type": "application/json", ...CORS_HEADERS },
       }
     );
   }
-}, {
-  onListen({ port, hostname }) {
-    console.log(`Server started at http://${hostname}:${port}`);
-  },
 });
